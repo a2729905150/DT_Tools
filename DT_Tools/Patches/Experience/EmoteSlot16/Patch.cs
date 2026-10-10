@@ -59,6 +59,10 @@ namespace DT_Tools.Patches.Experience.EmoteSlot16
         /// <summary>本次 EnsureSchema 调用前的 32 槽数据备份（防止原版按 Length!=8 重置为默认 8 槽）。</summary>
         private static int[] _backup32;
 
+        /// <summary>原版清理前的已拥有表情备份（原版 EnsureSchema 在 Version&lt;5 时清空 OwnedEmoticonIds 只留默认，
+        /// 若用清空后的列表做槽位清理会误删非默认表情，导致每次进游戏都要重新配）。</summary>
+        private static List<int> _backupOwned;
+
         private static void Prefix(SaveManager __instance)
         {
             try
@@ -70,10 +74,15 @@ namespace DT_Tools.Patches.Experience.EmoteSlot16
                     && data.EquippedEmoticonIds.Length == EmoteSlot16State.TotalSlots)
                 {
                     _backup32 = (int[])data.EquippedEmoticonIds.Clone();
+                    // 同步备份清理前的拥有列表（原版 Version<5 分支会清空它）
+                    _backupOwned = data.OwnedEmoticonIds != null
+                        ? new List<int>(data.OwnedEmoticonIds)
+                        : null;
                 }
                 else
                 {
                     _backup32 = null;
+                    _backupOwned = null;
                 }
             }
             catch (Exception)
@@ -92,15 +101,27 @@ namespace DT_Tools.Patches.Experience.EmoteSlot16
                 // 1) 原版因 Length!=8 把 32 槽重置为默认 8 槽：用备份恢复第 9-32 槽的表情（数据保护，始终执行）
                 if (_backup32 != null)
                 {
-                    // 对齐原版 EnsureSchema 的无效表情清理：未拥有的表情从槽位移除
-                    var owned = data.OwnedEmoticonIds;
+                    // 无效表情清理用【备份的】拥有列表判断，避免原版 Version<5 清空 OwnedEmoticonIds
+                    // 后把非默认表情误判为"未拥有"而置 -1（否则每次进游戏表情配置都会丢）。
+                    var owned = _backupOwned ?? data.OwnedEmoticonIds;
                     for (int i = 0; i < _backup32.Length; i++)
                     {
                         if (_backup32[i] > 0 && owned != null && !owned.Contains(_backup32[i]))
                             _backup32[i] = -1;
                     }
                     data.EquippedEmoticonIds = _backup32;
+                    // 原版 Version<5 分支会清空 OwnedEmoticonIds 只留默认表情：把备份的已拥有表情合并回去，
+                    // 玩家不因升级丢失已购买/解锁的表情（槽位清理因此也始终以真实拥有列表为准）。
+                    if (_backupOwned != null && data.OwnedEmoticonIds != null)
+                    {
+                        foreach (int id in _backupOwned)
+                        {
+                            if (id > 0 && !data.OwnedEmoticonIds.Contains(id))
+                                data.OwnedEmoticonIds.Add(id);
+                        }
+                    }
                     _backup32 = null;
+                    _backupOwned = null;
                     return;
                 }
                 int[] arr = data.EquippedEmoticonIds;
